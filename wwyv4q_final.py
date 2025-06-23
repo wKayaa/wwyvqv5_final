@@ -1686,14 +1686,14 @@ class TargetGenerator:
         return targets
 
 class WWYV4QPerfectFramework:
-    """Main framework class with comprehensive credential extraction"""
-    
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
+    def __init__(self, framework_config: FrameworkConfig, raw_config: dict):
+        self.config = framework_config
+        self.raw_config = raw_config  # <-- pour accès aux champs comme notifications, etc.
+
         self.logger = logging.getLogger(f"{__name__}.WWYV4QPerfectFramework")
-        self.aws_validator = AWSValidator(config["notifications"]["telegram"])
-        self.credential_extractor = PerfectCredentialExtractor(config)
-        self.target_generator = TargetGenerator(config)
+        self.aws_validator = AWSValidator(self.raw_config["notifications"]["telegram"])
+        self.credential_extractor = PerfectCredentialExtractor(self.config)
+        self.target_generator = TargetGenerator(self.raw_config)
         self.extracted_credentials: List[PerfectExtractedCredential] = []
         self.stats = {
             "targets_scanned": 0,
@@ -1725,7 +1725,6 @@ class WWYV4QPerfectFramework:
                             host=parsed.hostname,
                             port=parsed.port or (443 if parsed.scheme == 'https' else 80),
                             protocol=parsed.scheme,
-                            path=parsed.path or '/'
                         ))
                     else:
                         # Simple host
@@ -1769,7 +1768,7 @@ class WWYV4QPerfectFramework:
         self.logger.info(f"✅ PERFECT BATCH {batch_num} STARTING: {len(targets)} targets")
         
         # Create semaphore to limit concurrency
-        semaphore = asyncio.Semaphore(self.config["extraction"]["threads"])
+        semaphore = asyncio.Semaphore(self.config.thread_count)
         
         async def process_target(target):
             async with semaphore:
@@ -1936,7 +1935,24 @@ async def main():
 """)
     
     # Initialize framework
-    framework = WWYV4QPerfectFramework(config)
+    framework_config = FrameworkConfig(
+    thread_count=config["extraction"]["threads"],
+    timeout=config["extraction"]["timeout"],
+    log_level=args.log_level,
+    output_dir=config["output"]["directory"],
+    save_json="json" in config["output"]["formats"],
+    save_csv="csv" in config["output"]["formats"],
+    save_markdown="md" in config["output"]["formats"],
+    aws_region=config["aws"]["region"],
+    aws_profile=config["aws"]["profile"],
+    port_scan_timeout=config["scanning"]["port_scan_timeout"],
+    max_concurrent_scans=config["scanning"]["max_concurrent_scans"],
+    lab_mode=config["lab_mode"]["enabled"],
+    allowed_networks=config["lab_mode"]["allowed_networks"]
+)
+
+# Passer les deux objets
+    framework = WWYV4QPerfectFramework(framework_config, config)  # 2e paramètre = dict
     
     try:
         if args.mass_scan:
@@ -1962,8 +1978,13 @@ if __name__ == "__main__":
     asyncio.run(main())
 
     
-# Disable SSL warnings for testing environments
-disable_warnings(InsecureRequestWarning)
+try:
+    from urllib3.disable_warnings import disable_warnings
+    from urllib3.exceptions import InsecureRequestWarning
+    disable_warnings(InsecureRequestWarning)
+except ImportError:
+    import warnings
+    warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 # ============================================================================
 # CORE FRAMEWORK CLASSES AND ENUMS
